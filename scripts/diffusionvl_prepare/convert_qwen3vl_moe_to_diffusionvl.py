@@ -19,6 +19,13 @@ for p in (project_root, train_root):
 from llava.model.language_model.llava_diffusionvl_qwen3vl_moe import DiffusionVLQwen3VLMoeConfig
 
 
+DTYPE_MAP = {
+    "bf16": torch.bfloat16,
+    "fp16": torch.float16,
+    "fp32": torch.float32,
+}
+
+
 def _resolve_source_path(source_path: str) -> str:
     if os.path.isdir(source_path):
         print(f"Source path '{source_path}' is a local directory. Using it directly.")
@@ -47,16 +54,17 @@ def _copy_non_weight_files(source_local_path: str, dest_path: str):
             shutil.copy2(src_file, dest_path)
 
 
-def convert_qwen3vl_moe_to_diffusionvl(source_path: str, dest_path: str):
+def convert_qwen3vl_moe_to_diffusionvl(source_path: str, dest_path: str, dtype: torch.dtype):
     source_local_path = _resolve_source_path(source_path)
     os.makedirs(dest_path, exist_ok=True)
 
     _copy_non_weight_files(source_local_path, dest_path)
 
     print(f"\nLoading original Qwen3-VL-MoE model from {source_local_path} for conversion...")
+    print(f"Using load dtype: {dtype}")
     original_model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
         source_local_path,
-        torch_dtype=torch.float32,
+        torch_dtype=dtype,
         low_cpu_mem_usage=True,
     )
 
@@ -79,6 +87,9 @@ def convert_qwen3vl_moe_to_diffusionvl(source_path: str, dest_path: str):
     print("Saving DiffusionVL-Qwen3VL-MoE config...")
     config = DiffusionVLQwen3VLMoeConfig.from_pretrained(source_local_path)
     config.text_config = original_model.model.language_model.config
+    config.tie_word_embeddings = False
+    if hasattr(config, "text_config") and config.text_config is not None:
+        config.text_config.tie_word_embeddings = False
     config.save_pretrained(dest_path)
 
     print("Saving converted model and visual component weights...")
@@ -117,6 +128,13 @@ if __name__ == "__main__":
         required=True,
         help="Destination directory for converted DiffusionVL checkpoint.",
     )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bf16",
+        choices=list(DTYPE_MAP.keys()),
+        help="Load dtype for source model during conversion. Default bf16 for memory-safe conversion.",
+    )
     args = parser.parse_args()
 
-    convert_qwen3vl_moe_to_diffusionvl(args.source_path, args.dest_path)
+    convert_qwen3vl_moe_to_diffusionvl(args.source_path, args.dest_path, DTYPE_MAP[args.dtype])

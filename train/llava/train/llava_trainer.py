@@ -275,7 +275,12 @@ class LLaVATrainer(Trainer):
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
 
-        if self.args.group_by_length:
+        group_by_length = getattr(self.args, "group_by_length", False)
+        group_by_modality_length = getattr(self.args, "group_by_modality_length", False)
+        group_by_modality_length_auto = getattr(self.args, "group_by_modality_length_auto", False)
+        group_by_varlen = getattr(self.args, "group_by_varlen", False)
+
+        if group_by_length:
             lengths = self.train_dataset.lengths
             return LengthGroupedSampler(
                 # self.args.train_batch_size * self.args.gradient_accumulation_steps, # TODO: seems that we should not have gradient_accumulation_steps
@@ -284,7 +289,7 @@ class LLaVATrainer(Trainer):
                 world_size=self.args.world_size * self.args.gradient_accumulation_steps,  # TODO: seems that this may work?
                 lengths=lengths,
             )
-        elif self.args.group_by_modality_length:
+        elif group_by_modality_length:
             lengths = self.train_dataset.modality_lengths
             return LengthGroupedSampler(
                 # self.args.train_batch_size * self.args.gradient_accumulation_steps, # TODO: seems that we should not have gradient_accumulation_steps
@@ -294,7 +299,7 @@ class LLaVATrainer(Trainer):
                 lengths=lengths,
                 group_by_modality=True,
             )
-        elif self.args.group_by_modality_length_auto:
+        elif group_by_modality_length_auto:
             lengths = self.train_dataset.modality_lengths
             return LengthGroupedSampler(
                 # self.args.train_batch_size * self.args.gradient_accumulation_steps, # TODO: seems that we should not have gradient_accumulation_steps
@@ -304,7 +309,7 @@ class LLaVATrainer(Trainer):
                 lengths=lengths,
                 group_by_modality_auto=True,
             )
-        elif self.args.group_by_varlen:
+        elif group_by_varlen:
             lengths = self.train_dataset.lengths
             return LengthGroupedSampler(
                 self.args.train_batch_size * self.args.gradient_accumulation_steps,
@@ -518,11 +523,52 @@ class LLaVATrainer(Trainer):
                 # mtime is not reliable especially on some fuse fs in cloud environments.
                 self._rotate_checkpoints(use_mtime=False, output_dir=run_dir)
 
+    def _collect_custom_train_metrics(self) -> Dict[str, float]:
+        def _extract_from_model(m):
+            metrics = getattr(m, "_current_custom_metrics", None)
+            if not isinstance(metrics, dict) or len(metrics) == 0:
+                return {}
+            out = {}
+            for k, v in metrics.items():
+                if isinstance(v, torch.Tensor):
+                    value = v.detach()
+                    out[k] = float(value.mean().cpu()) if value.numel() > 1 else float(value.cpu().item())
+                elif isinstance(v, (int, float)):
+                    out[k] = float(v)
+            metrics.clear()
+            return out
+
+        candidates = []
+        if hasattr(self, "model") and self.model is not None:
+            candidates.append(self.model)
+        if hasattr(self, "model_wrapped") and self.model_wrapped is not None:
+            candidates.append(self.model_wrapped)
+        if hasattr(self, "accelerator") and hasattr(self, "model") and self.model is not None:
+            try:
+                candidates.append(self.accelerator.unwrap_model(self.model))
+            except Exception:
+                pass
+
+        seen = set()
+        for cand in candidates:
+            cur = cand
+            while cur is not None and id(cur) not in seen:
+                seen.add(id(cur))
+                extracted = _extract_from_model(cur)
+                if extracted:
+                    return extracted
+                cur = getattr(cur, "module", None)
+        return {}
+
+    def log(self, logs: Dict[str, float], *args, **kwargs) -> None:
+        merged_logs = {} if logs is None else dict(logs)
+        custom_metrics = self._collect_custom_train_metrics()
+        for key, value in custom_metrics.items():
+            merged_logs.setdefault(key, value)
+        super().log(merged_logs, *args, **kwargs)
 
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
         if getattr(self.args, "tune_mm_mlp_adapter", False):
             pass
         else:
             super(LLaVATrainer, self)._save(output_dir, state_dict)
-
-

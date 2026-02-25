@@ -3,10 +3,19 @@ __pycache__
 *.pyc
 *.egg-info
 dist
+.env
+.env.*
+.envs/
+.venv/
+.venv*/
+.venv_dimoe_local/
 
 # Log
 *.log
 *.log.*
+log/
+logs/
+**/logs/
 # *.json
 # *.jsonl
 

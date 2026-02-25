@@ -108,6 +108,9 @@ class DiffusionVLQwen3VLMoeConfig(HFPretrainedConfig):
 
         for key, value in self.text_config.to_dict().items():
             setattr(self, key, value)
+        # Keep diffusion MoE checkpoint loading deterministic: do not tie embeddings/lm_head.
+        # This model carries extra newly-initialized routing heads (NCR) and tying can corrupt shapes.
+        self.tie_word_embeddings = False
 
     def to_dict(self):
         output = super().to_dict()
@@ -167,7 +170,23 @@ class NoiseConditionedSparseMoeBlock(Qwen3VLMoeTextSparseMoeBlock):
             flat_t = self._router_t.reshape(-1).to(hidden_states_flat.device, hidden_states_flat.dtype)
             flat_m = self._router_m.reshape(-1).to(hidden_states_flat.device, hidden_states_flat.dtype)
             if flat_t.numel() == hidden_states_flat.shape[0] and flat_m.numel() == hidden_states_flat.shape[0]:
-                t_feat = self.t_proj(self._fourier_embedding(flat_t))
+                fourier = self._fourier_embedding(flat_t)
+                t_weight_shape = tuple(self.t_proj.weight.shape) if hasattr(self, "t_proj") and hasattr(self.t_proj, "weight") else None
+                m_weight_shape = tuple(self.m_proj.weight.shape) if hasattr(self, "m_proj") and hasattr(self.m_proj, "weight") else None
+                proj_ok = (
+                    hasattr(self, "t_proj")
+                    and hasattr(self, "m_proj")
+                    and t_weight_shape == (hidden_states_flat.shape[-1], fourier.shape[-1])
+                    and m_weight_shape == (hidden_states_flat.shape[-1], 1)
+                )
+                if not proj_ok:
+                    raise RuntimeError(
+                        "NCR projection shape mismatch in NoiseConditionedSparseMoeBlock: "
+                        f"expected t_proj.weight {(hidden_states_flat.shape[-1], fourier.shape[-1])}, got {t_weight_shape}; "
+                        f"expected m_proj.weight {(hidden_states_flat.shape[-1], 1)}, got {m_weight_shape}."
+                    )
+
+                t_feat = self.t_proj(fourier)
                 m_feat = self.m_proj(flat_m.unsqueeze(-1))
                 routing_hidden = routing_hidden + t_feat + m_feat
 
@@ -220,10 +239,20 @@ class DiffusionVLQwen3VLMoeAttention(Qwen3VLMoeTextAttention):
             if store_kv:
                 cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
                 key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
-            elif self.layer_idx < len(past_key_values):
-                past_key_states, past_value_states = past_key_values[self.layer_idx]
-                key_states = torch.cat([past_key_states, key_states], dim=2)
-                value_states = torch.cat([past_value_states, value_states], dim=2)
+            else:
+                past_key_states = None
+                past_value_states = None
+                if hasattr(past_key_values, "layers"):
+                    if self.layer_idx < len(past_key_values.layers):
+                        layer_cache = past_key_values.layers[self.layer_idx]
+                        past_key_states = getattr(layer_cache, "keys", None)
+                        past_value_states = getattr(layer_cache, "values", None)
+                elif self.layer_idx < len(past_key_values):
+                    past_key_states, past_value_states = past_key_values[self.layer_idx]
+
+                if past_key_states is not None and past_value_states is not None:
+                    key_states = torch.cat([past_key_states, key_states], dim=2)
+                    value_states = torch.cat([past_value_states, value_states], dim=2)
 
         if hasattr(ALL_ATTENTION_FUNCTIONS, "get_interface"):
             attention_interface: Callable = ALL_ATTENTION_FUNCTIONS.get_interface(
@@ -423,7 +452,7 @@ class DiffusionVLQwen3VLMoeTextModel(Qwen3VLMoeTextModelOriginal):
 class DiffusionVLQwen3VLMoeForCausalLM_Base(Qwen3VLMoePreTrainedModel):
     """Base CausalLM model with BD3-LM, NCR, BEBC and optional DSA loss."""
 
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config):
         super().__init__(config)
@@ -701,12 +730,13 @@ class DiffusionVLQwen3VLMoeForCausalLM_Base(Qwen3VLMoePreTrainedModel):
             block_size=self.model.bd3lm_block_size,
             n=seq_len,
         )
+        mask = mask.to(torch.bool)
 
         if attention_mask is not None and attention_mask.dim() == 2:
             extended_attention_mask = torch.cat([attention_mask, attention_mask], dim=1)
             query_validity_mask = extended_attention_mask.unsqueeze(-1)
             key_validity_mask = extended_attention_mask.unsqueeze(-2)
-            combined_padding_mask_2d = query_validity_mask & key_validity_mask
+            combined_padding_mask_2d = (query_validity_mask & key_validity_mask).to(torch.bool)
             mask = mask & combined_padding_mask_2d
 
         attention_mask_4d = torch.zeros(mask.shape, dtype=inputs_embeds.dtype, device=device)
@@ -1096,6 +1126,7 @@ class DiffusionVLQwen3VLMoeForCausalLM(DiffusionVLQwen3VLMoeForCausalLM_Base, Ll
             *model_args,
             **kwargs,
         )
+        model.config.tie_word_embeddings = False
 
         vision_config_path = os.path.join(pretrained_model_name_or_path, "vision_config.json")
         if os.path.exists(vision_config_path):

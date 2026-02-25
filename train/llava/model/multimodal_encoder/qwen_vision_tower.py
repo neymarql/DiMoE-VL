@@ -60,6 +60,18 @@ class LlavaQwenVisionTower(nn.Module):
             self._config = args.vision_config
         else:
             self._config = AutoConfig.from_pretrained(vision_tower_path).vision_config
+
+        # Qwen3-VL(-MoE) vision config is close to Qwen2.5-VL but may miss
+        # a few fields required by Qwen2_5_VisionTransformerPretrainedModel.
+        if not hasattr(self._config, "fullatt_block_indexes"):
+            if hasattr(self._config, "deepstack_visual_indexes"):
+                self._config.fullatt_block_indexes = list(self._config.deepstack_visual_indexes)
+            else:
+                self._config.fullatt_block_indexes = [max(0, int(self._config.depth) - 1)]
+        if not hasattr(self._config, "window_size"):
+            self._config.window_size = 112
+        if not hasattr(self._config, "tokens_per_second"):
+            self._config.tokens_per_second = 4
         
         head_dim = self._config.hidden_size // self._config.num_heads
         self.rotary_pos_emb = Qwen2_5_VisionRotaryEmbedding(head_dim // 2)

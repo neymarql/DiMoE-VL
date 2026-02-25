@@ -479,13 +479,101 @@ def preprocess_qwen3_bridge(
     chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}"
     tokenizer.chat_template = chat_template
 
+    def _apply_chat_as_ids(messages):
+        rendered = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+
+        if isinstance(rendered, torch.Tensor):
+            rendered = rendered.tolist()
+
+        if isinstance(rendered, str):
+            return tokenizer(rendered, add_special_tokens=False).input_ids
+
+        if isinstance(rendered, list):
+            flat_ids = []
+
+            def _flatten_to_ids(x):
+                if isinstance(x, torch.Tensor):
+                    _flatten_to_ids(x.tolist())
+                    return
+                if isinstance(x, (list, tuple)):
+                    for y in x:
+                        _flatten_to_ids(y)
+                    return
+                if isinstance(x, int):
+                    flat_ids.append(int(x))
+                    return
+                if isinstance(x, str):
+                    tok_id = tokenizer.convert_tokens_to_ids(x)
+                    if tok_id is None or tok_id < 0:
+                        flat_ids.extend(tokenizer(x, add_special_tokens=False).input_ids)
+                    else:
+                        flat_ids.append(int(tok_id))
+                    return
+                flat_ids.extend(tokenizer(str(x), add_special_tokens=False).input_ids)
+
+            _flatten_to_ids(rendered)
+            return flat_ids
+
+        return tokenizer(str(rendered), add_special_tokens=False).input_ids
+
+    def _normalize_content(content):
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    item_type = item.get("type", "")
+                    if item_type in {"image", "image_url"}:
+                        parts.append(DEFAULT_IMAGE_TOKEN)
+                    elif isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+                    elif isinstance(item.get("value"), str):
+                        parts.append(item["value"])
+                    elif isinstance(item.get("content"), str):
+                        parts.append(item["content"])
+            return "\n".join(parts)
+        return str(content)
+
+    def _ensure_int_list(seq):
+        out = []
+
+        def _append(v):
+            if isinstance(v, torch.Tensor):
+                _append(v.tolist())
+                return
+            if isinstance(v, (list, tuple)):
+                for u in v:
+                    _append(u)
+                return
+            if isinstance(v, int):
+                out.append(int(v))
+                return
+            if isinstance(v, str):
+                tok_id = tokenizer.convert_tokens_to_ids(v)
+                if tok_id is None or tok_id < 0:
+                    out.extend(tokenizer(v, add_special_tokens=False).input_ids)
+                else:
+                    out.append(int(tok_id))
+                return
+            out.append(int(v))
+
+        _append(seq)
+        return out
+
     input_ids, targets = [], []
     for source in sources:
         if roles[source[0]["from"]] != roles["human"]:
             source = source[1:]
 
         input_id, target = [], []
-        input_id += tokenizer.apply_chat_template([{"role": "system", "content": system_message}])
+        input_id += _apply_chat_as_ids([{"role": "system", "content": system_message}])
         target += [IGNORE_INDEX] * len(input_id)
 
         for conv in source:
@@ -497,14 +585,17 @@ def preprocess_qwen3_bridge(
                 content = conv["value"]
 
             role = roles.get(role, role)
+            content = _normalize_content(content)
             content = content.replace(DEFAULT_IMAGE_TOKEN, vision_placeholder)
-            encode_id = tokenizer.apply_chat_template([{"role": role, "content": content}])
+            encode_id = _apply_chat_as_ids([{"role": role, "content": content}])
             input_id += encode_id
             if role in ["user", "system"]:
                 target += [IGNORE_INDEX] * len(encode_id)
             else:
                 target += encode_id
 
+        input_id = _ensure_int_list(input_id)
+        target = _ensure_int_list(target)
         assert len(input_id) == len(target), f"{len(input_id)} != {len(target)}"
         for idx, encode_id in enumerate(input_id):
             if encode_id in unmask_tokens_idx:
@@ -1615,11 +1706,14 @@ def get_model(model_args, training_args, bnb_model_from_pretrained_args):
 
     if overwrite_config:
         overwrite_config["_attn_implementation"] = training_args.attn_implementation
+        overwrite_config["tie_word_embeddings"] = False
         assert cfg_pretrained is not None, "cfg_pretrained is None"
 
         rank0_print(f"Overwriting config with {overwrite_config}")
         for k, v in overwrite_config.items():
             setattr(cfg_pretrained, k, v)
+        if hasattr(cfg_pretrained, "text_config") and cfg_pretrained.text_config is not None:
+            setattr(cfg_pretrained.text_config, "tie_word_embeddings", False)
 
         customized_kwargs["config"] = cfg_pretrained
 

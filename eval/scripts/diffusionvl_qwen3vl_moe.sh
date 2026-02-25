@@ -18,6 +18,8 @@ MODEL="llava_onevision_diffusionvl_qwen3vl_moe"
 MODEL_NAME="diffusionvl_qwen3vl_moe"
 CONV_TEMPLATE="qwen_3"
 SCORING_MODE="loss"  # loss: argmin-compatible; neg_loss: use with multiple_choice_argmax tasks
+SCORING_K=${SCORING_K:-8}
+SCORING_SEED_OFFSET=${SCORING_SEED_OFFSET:-0}
 
 declare -A GPU_STATUS
 declare -A GPU_PIDS
@@ -72,6 +74,7 @@ while [ $FINISHED_TASKS -lt $TOTAL_TASKS ]; do
                 MODEL_ARGS_STR="pretrained=$MODEL_PATH,conv_template=$CONV_TEMPLATE,model_name=$MODEL_NAME"
                 MODEL_ARGS_STR="$MODEL_ARGS_STR,enable_bd3lm=True,bd3lm_block_size=$BLOCK_SIZE"
                 MODEL_ARGS_STR="$MODEL_ARGS_STR,scoring_mode=$SCORING_MODE"
+                MODEL_ARGS_STR="$MODEL_ARGS_STR,diffusion_scoring_k_samples=$SCORING_K,diffusion_scoring_seed_offset=$SCORING_SEED_OFFSET"
 
                 (
                     CUDA_VISIBLE_DEVICES=$gpu PYTHONUNBUFFERED=1 accelerate launch --num_processes=1 -m lmms_eval \

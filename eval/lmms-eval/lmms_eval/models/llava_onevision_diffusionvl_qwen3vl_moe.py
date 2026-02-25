@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import logging
 import math
@@ -93,6 +94,8 @@ class Llava_OneVision_DiffusionVL_Qwen3VLMoe(lmms):
         bd3lm_block_size: Optional[int] = 8,
         model_max_length: Optional[int] = None,
         scoring_mode: Optional[str] = "loss",
+        diffusion_scoring_k_samples: Optional[int] = None,
+        diffusion_scoring_seed_offset: Optional[int] = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -145,6 +148,20 @@ class Llava_OneVision_DiffusionVL_Qwen3VLMoe(lmms):
         self.scoring_mode = (scoring_mode or "loss").strip().lower()
         if self.scoring_mode not in {"loss", "neg_loss"}:
             raise ValueError(f"Unsupported scoring_mode: {scoring_mode}. Choose from ['loss', 'neg_loss'].")
+        env_k = os.environ.get("DIFFUSION_SCORING_K")
+        env_seed_offset = os.environ.get("DIFFUSION_SCORING_SEED_OFFSET")
+        if diffusion_scoring_k_samples is None:
+            diffusion_scoring_k_samples = int(env_k) if env_k is not None else 1
+        if diffusion_scoring_seed_offset is None:
+            diffusion_scoring_seed_offset = int(env_seed_offset) if env_seed_offset is not None else 0
+        self.diffusion_scoring_k_samples = max(1, int(diffusion_scoring_k_samples))
+        self.diffusion_scoring_seed_offset = int(diffusion_scoring_seed_offset)
+        eval_logger.info(
+            "Diffusion scoring setup: mode=%s, k_samples=%d, seed_offset=%d",
+            self.scoring_mode,
+            self.diffusion_scoring_k_samples,
+            self.diffusion_scoring_seed_offset,
+        )
 
         overwrite_config = {}
         overwrite_config["mm_spatial_pool_stride"] = self.mm_spatial_pool_stride
@@ -264,6 +281,20 @@ class Llava_OneVision_DiffusionVL_Qwen3VLMoe(lmms):
     def world_size(self):
         return self._world_size
 
+    def _diffusion_scoring_seed(self, task: str, split: str, doc_id: Union[int, str]) -> int:
+        key = f"{task}::{split}::{doc_id}"
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        # Keep seed in 32-bit int range for torch.manual_seed compatibility.
+        seed = int(digest[:16], 16) % (2**31 - 1)
+        seed = (seed + self.diffusion_scoring_seed_offset) % (2**31 - 1)
+        return seed if seed > 0 else 1
+
+    def _fork_rng_devices(self):
+        if torch.cuda.is_available() and self.device.type == "cuda":
+            index = self.device.index if self.device.index is not None else torch.cuda.current_device()
+            return [index]
+        return []
+
     def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> List[int]:
         """ """
         add_special_tokens = False if add_special_tokens is None else add_special_tokens
@@ -382,14 +413,34 @@ class Llava_OneVision_DiffusionVL_Qwen3VLMoe(lmms):
                 self._config.mm_spatial_pool_stride = self.mm_spatial_pool_stride
                 self._config.mm_spatial_pool_mode = self.mm_spatial_pool_mode
 
-            with torch.inference_mode():
-                outputs = self.model(input_ids=full_input_ids, labels=labels, images=image_tensor, use_cache=False, **kwargs)
+            base_seed = self._diffusion_scoring_seed(task=task, split=split, doc_id=doc_id)
+            base_losses = []
+            first_outputs = None
+            for sample_idx in range(self.diffusion_scoring_k_samples):
+                sample_seed = (base_seed + sample_idx) % (2**31 - 1)
+                if sample_seed <= 0:
+                    sample_seed = 1
+                with torch.random.fork_rng(devices=self._fork_rng_devices()):
+                    torch.manual_seed(sample_seed)
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(sample_seed)
+                    with torch.inference_mode():
+                        outputs = self.model(
+                            input_ids=full_input_ids,
+                            labels=labels,
+                            images=image_tensor,
+                            use_cache=False,
+                            **kwargs,
+                        )
+                if first_outputs is None:
+                    first_outputs = outputs
+                base_losses.append(float(outputs["loss"].item()))
 
-            base_loss = float(outputs["loss"].item())
+            base_loss = float(sum(base_losses) / len(base_losses))
             # `loss` keeps compatibility with lmms-eval multiple_choice (argmin).
             # `neg_loss` is for explicit score maximization flows (argmax).
             score = base_loss if self.scoring_mode == "loss" else -base_loss
-            logits = outputs["logits"]
+            logits = first_outputs["logits"]
             greedy_tokens = logits.argmax(dim=-1)
             cont_toks = full_input_ids[:, input_ids.shape[1]:]
             greedy_tokens = greedy_tokens[:, input_ids.shape[1]: full_input_ids.shape[1]]
