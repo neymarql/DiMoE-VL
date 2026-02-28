@@ -1,0 +1,85 @@
+model:
+  backbone: inclusionAI/LLaDA-MoE-7B-A1B-Instruct
+  checkpoint: ""
+  vision_tower: /home/qianlong/hf/siglip2-giant-opt-patch16-384
+  num_experts: 64
+  num_t_buckets: 8
+  num_token_types: 4
+  image_token: "<image>"
+  mask_token: "<mask>"
+  allow_dummy_vision: true
+infer:
+  remasking: low_confidence
+eval:
+  max_new_tokens: 32
+  tasks:
+    - name: textvqa_val_local
+      suite: open_ended
+      format: tsv_qa
+      path: /home/qianlong/datasets/eval/TextVQA_VAL_local.tsv
+      question_col: question
+      answer_col: answer
+      image_col: image_path
+      id_col: index
+      limit: 512
+    - name: docvqa_val
+      suite: open_ended
+      format: tsv_qa
+      path: /home/qianlong/datasets/eval/DocVQA_VAL.tsv
+      question_col: question
+      answer_col: answer
+      image_col: image_path
+      image_root: /home/qianlong/datasets/eval/images/DocVQA_VAL
+      id_col: index
+      limit: 512
+    - name: mme_local
+      suite: open_ended
+      format: tsv_qa
+      path: /home/qianlong/datasets/eval/MME.tsv
+      question_col: question
+      answer_col: answer
+      image_col: image_path
+      image_root: /home/qianlong/datasets/eval/images/MME
+      id_col: index
+      limit: 512
+    - name: pope_local
+      suite: open_ended
+      format: tsv_qa
+      path: /home/qianlong/datasets/eval/POPE_local.tsv
+      question_col: question
+      answer_col: answer
+      image_col: image_path
+      id_col: index
+      limit: 512
+    - name: mmmu_dev_val
+      suite: multiple_choice
+      format: tsv_qa
+      path: /home/qianlong/datasets/eval/MMMU_DEV_VAL.tsv
+      question_col: question
+      answer_col: answer
+      image_col: image_path
+      image_root: /home/qianlong/datasets/eval/images/MMMU
+      id_col: index
+      limit: 512
+    - name: mmbench_dev_en_v11
+      suite: multiple_choice
+      format: tsv_qa
+      path: /home/qianlong/datasets/eval/MMBench_DEV_EN_V11.tsv
+      question_col: question
+      answer_col: answer
+      image_col: image
+      image_encoding: base64
+      image_cache_dir: /tmp/dimoe_eval_img_cache/mmbench_dev_en_v11
+      id_col: index
+      limit: 512
+    - name: mmvet
+      suite: open_ended
+      format: tsv_qa
+      path: /home/qianlong/datasets/eval/MMVet.tsv
+      question_col: question
+      answer_col: answer
+      image_col: image
+      image_encoding: base64
+      image_cache_dir: /tmp/dimoe_eval_img_cache/mmvet
+      id_col: index
+      limit: 256

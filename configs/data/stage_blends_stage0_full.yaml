@@ -1,0 +1,7 @@
+output_dir: artifacts/data/v1/blends
+seed: 3407
+stages:
+  stage0_naive:
+    source_jsonl: artifacts/data/v1/stage1_projector.jsonl
+    max_samples: -1
+    shuffle: false

@@ -1,0 +1,15 @@
+model:
+  backbone: inclusionAI/LLaDA-MoE-7B-A1B-Instruct
+  checkpoint: ""
+  vision_tower: /home/qianlong/hf/siglip2-giant-opt-patch16-384
+  num_experts: 64
+  num_t_buckets: 8
+  num_token_types: 4
+  image_token: "<image>"
+  mask_token: "<mask>"
+  allow_dummy_vision: true
+infer:
+  remasking: low_confidence
+  active_params_billion: 1.4
+  benchmark_samples: 64
+  benchmark_max_new_tokens: 64

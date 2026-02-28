@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dimoe-vl"
+version = "0.1.0"
+description = "DiMoE-VLM infrastructure: diffusion + MoE + multimodal"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+  "transformers>=4.46,<5",
+  "accelerate>=0.34",
+  "deepspeed>=0.15",
+  "numpy>=1.25",
+  "pandas>=2.0",
+  "Pillow>=10.0",
+  "pyyaml>=6.0",
+  "jsonlines>=4.0",
+  "matplotlib>=3.8",
+  "scipy>=1.11",
+  "tqdm>=4.66",
+  "safetensors>=0.4",
+  "fastapi>=0.111",
+  "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+dimoe = "dimoe.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

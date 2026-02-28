@@ -1,0 +1,4 @@
+source_jsonl: artifacts/data/v1/blends/stage2_full.jsonl
+output_dir: artifacts/data/v1/wds/stage2_full
+shard_size: 2000
+include_image: true

@@ -1,0 +1,39 @@
+# Ablation grid for stage2_full / stage3_lownfe
+variants:
+  naive_attach:
+    curriculum:
+      lambda_bal: 0.0
+      lambda_prior: 0.0
+      lambda_cons: 0.0
+      lambda_entropy: 0.0
+      include_prompt_ratio: 0.0
+  dmar_only:
+    curriculum:
+      lambda_bal: 0.0
+      lambda_prior: 0.02
+      lambda_cons: 0.03
+      lambda_entropy: 0.005
+      include_prompt_ratio: 0.0
+  ebcmc_only:
+    curriculum:
+      lambda_bal: 0.02
+      lambda_prior: 0.0
+      lambda_cons: 0.0
+      lambda_entropy: 0.0
+      include_prompt_ratio: 0.15
+  full:
+    curriculum:
+      lambda_bal: 0.02
+      lambda_prior: 0.02
+      lambda_cons: 0.03
+      lambda_entropy: 0.005
+      include_prompt_ratio: 0.15
+  no_consistency:
+    curriculum:
+      lambda_cons: 0.0
+  no_prior:
+    curriculum:
+      lambda_prior: 0.0
+  no_balance:
+    curriculum:
+      lambda_bal: 0.0

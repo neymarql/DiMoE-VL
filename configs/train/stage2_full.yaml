@@ -1,0 +1,40 @@
+stage: stage2_full
+output_dir: artifacts/train
+model:
+  backbone: /home/qianlong/hf/inclusionAI-LLaDA-MoE-7B-A1B-Instruct
+  init_checkpoint: ""
+  vision_tower: /home/qianlong/hf/siglip-so400m-patch14-384
+  num_experts: 64
+  num_t_buckets: 8
+  num_token_types: 4
+  image_token: "<image>"
+  mask_token: "<mask>"
+  allow_dummy_vision: false
+  backbone_trust_remote_code: true
+  vision_trust_remote_code: true
+  local_files_only: true
+data:
+  train_jsonl: artifacts/data/v1/blends/stage2_full.jsonl
+train:
+  engine: deepspeed
+  deepspeed_config: configs/train/deepspeed_zero3_h800.json
+  max_length: 4096
+  micro_batch_size: 1
+  grad_accum: 16
+  num_workers: 2
+  pad_to_max_length: true
+  amp: true
+  bf16: true
+  gradient_checkpointing: true
+  freeze_vision: false
+  freeze_backbone: false
+  train_router_only: false
+  drop_last: false
+  find_unused_parameters: false
+  max_steps: 6000
+  lr: 5.0e-5
+  weight_decay: 0.01
+  clip_grad: 1.0
+  log_every: 10
+  save_every: 250
+  resume: true
